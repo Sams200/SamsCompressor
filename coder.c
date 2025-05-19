@@ -2,7 +2,7 @@
 // Created by sams on 4/22/25.
 //
 
-#include "jpeg.h"
+#include "coder.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -78,25 +78,21 @@ bool isInside(const int height, const int width, const int y, const int x) {
 /**
  * Downsample in blocks of 2x2
  */
-void downsampleCbCr(void **Cb, void **Cr, int height, int width) {
+void downsampleChroma(void **channel, int height, int width) {
     const int newHeight = (height + 1) / 2; // Ceiling division for odd dimensions
     const int newWidth = (width + 1) / 2;
     const int newSize = newHeight * newWidth;
 
-    void *newCb = malloc(sizeof(float) * newSize);
-    void *newCr = malloc(sizeof(float) * newSize);
+    void *newCh = malloc(sizeof(float) * newSize);
 
-    if (!newCb || !newCr) {
-        if (newCb) free(newCb);
-        if (newCr) free(newCr);
-        perror("downsampleCbCr - Could not allocate memory");
+    if (!newCh) {
+        if (newCh) free(newCh);
+        perror("downsample - Could not allocate memory");
         exit(1);
     }
 
-    const float* Cbp=(float*)*Cb;
-    const float* Crp=(float*)*Cr;
-    float* newCbp=(float*)newCb;
-    float* newCrp=(float*)newCr;
+    const float* chp=(float*)*channel;
+    float* newChp=(float*)newCh;
 
     // Average blocks of 2x2 pixels
     for (int i = 0; i < height; i += 2) {
@@ -104,7 +100,7 @@ void downsampleCbCr(void **Cb, void **Cr, int height, int width) {
             const int dy[]={0,1,0,1};
             const int dx[]={0,0,1,1};
 
-            float sumB=0,sumR=0;
+            float sum=0;
             float amount=0;
             for (int k=0; k<4; k++) {
                 const int ky=i+dy[k];
@@ -112,8 +108,7 @@ void downsampleCbCr(void **Cb, void **Cr, int height, int width) {
                 const int index=ky*width+kx;
 
                 if(isInside(height,width,ky,kx)) {
-                    sumB+=Cbp[index];
-                    sumR+=Crp[index];
+                    sum+=chp[index];
                     amount++;
                 }
             }
@@ -122,19 +117,15 @@ void downsampleCbCr(void **Cb, void **Cr, int height, int width) {
             const int newX=j/2;
             const int index=newY*newWidth + newX;
             if(amount==0) {
-                newCbp[index] = 128;
-                newCrp[index] = 128;
+                newChp[index] = 128;
             }
             else {
-                newCbp[index] = sumB/amount;
-                newCrp[index] = sumR/amount;
+                newChp[index] = sum/amount;
             }
         }
     }
-    free(*Cr);
-    free(*Cb);
-    *Cb = newCb;
-    *Cr = newCr;
+    free(*channel);
+    *channel = newChp;
 }
 
 typedef enum {
@@ -216,7 +207,7 @@ float* computeDCT() {
 
     for(int i=0; i<8; i++) {
         for(int j=0; j<8; j++) {
-            DCT[i*8+j] = cosf((float)(2*i+1) * (float)j * (float)M_PI/16.0f);
+            DCT[i*8+j] = cosf((float)(2*j+1) * (float)i * (float)M_PI/16.0f);
         }
     }
     return DCT;
@@ -235,12 +226,12 @@ void applyDCT8x8(const float* channel, const int width, const int y, const int x
 
     float* originalFloat=(float*)channel;
 
-    // Shift pixels left
+    // Shift pixels left by 128
     float temp[64];
     for(int i=0;i<8;i++) {
         for(int j=0;j<8;j++) {
             const int index=(i+y)*width+x+j;
-            temp[i*8+j]=originalFloat[index]-128;
+            temp[i*8+j]=originalFloat[index]-128.0f;
         }
     }
 
@@ -249,13 +240,13 @@ void applyDCT8x8(const float* channel, const int width, const int y, const int x
     for(int i=0;i<8;i++) {
         for(int j=0;j<8;j++) {
             float s=0.0f;
+            const float scale = (j==0)? ONE_OVER_SQRT_TWO:1.0f;
+
             for(int k=0;k<8;k++) {
-                s+=(float)temp[i*8+k]*dct[k*8+j];
+                s+=(float)temp[i*8+k] * dct[j*8+k];
             }
 
-            if(j==0)
-                s*=ONE_OVER_SQRT_TWO;
-            rowDCT[i*8+j]=s;
+            rowDCT[i*8+j]=s*scale;
         }
     }
 
@@ -263,15 +254,14 @@ void applyDCT8x8(const float* channel, const int width, const int y, const int x
     for(int i=0;i<8;i++) {
         for(int j=0;j<8;j++) {
             float s=0.0f;
+            const float scale = (i==0)? ONE_OVER_SQRT_TWO:1.0f;
+
             for(int k=0;k<8;k++) {
-                s+=rowDCT[k*8+j]*dct[i*8+k];
+                s+=rowDCT[k*8+j] * dct[i*8+k];
             }
 
-            if(i==0)
-                s*=ONE_OVER_SQRT_TWO;
-
-            const int index=(i+y)*width+x+j;
-            originalFloat[index]=s*0.25f; // 1/sqrt(2*8)=0.25
+            const int index=(i+y)*width + x+j;
+            originalFloat[index]=s*scale*0.25f; // 1/sqrt(2*8)=0.25
         }
     }
 }
@@ -291,14 +281,14 @@ static int LUMINANCE_QUANT[64] = {
 };
 
 static int CHROMA_QUANT[64] = {
-    17,  18,  24,  47,  99,  99,  99,  99,
-    18,  21,  26,  66,  99,  99,  99,  99,
-    24,  26,  56,  99,  99,  99,  99,  99,
-    47,  66,  99,  99,  99,  99,  99,  99,
-    99,  99,  99,  99,  99,  99,  99,  99,
-    99,  99,  99,  99,  99,  99,  99,  99,
-    99,  99,  99,  99,  99,  99,  99,  99,
-    99,  99,  99,  99,  99,  99,  99,  99
+    17,  18,  24,  47,  70,  80,  90,  95,
+    18,  21,  26,  66,  74,  84,  93,  95,
+    24,  26,  56,  78,  85,  93,  95,  98,
+    47,  66,  80,  86,  92,  95,  98,  99,
+    70,  74,  85,  92,  95,  97,  99,  99,
+    80,  84,  93,  95,  97,  99,  99,  99,
+    90,  93,  95,  98,  99,  99,  99,  99,
+    95,  95,  98,  99,  99,  99,  99,  99
 };
 
 /**
@@ -307,22 +297,35 @@ static int CHROMA_QUANT[64] = {
  * smaller, and a lower quality means we make it bigger
  */
 void computeQuantTable(int quantTable[64],unsigned int quality) {
-    if(quality<50)
-        quality=1000/(quality+1);
-    else
-        quality=200-(quality*2+1);
+    if(quality<1)
+        quality=1;
+    if(quality>100)
+        quality=100;
 
-    for(int i=0;i<64;i++) {
-        const unsigned int ax=(quantTable[i]*quality+100)/100;
+    quality=(unsigned int)((float)quality*0.85f);
 
-        if(ax<1)
-            quantTable[i]=1;
-        else if(ax>255)
-            quantTable[i]=255;
-        else
-            quantTable[i]=(int)ax;
+    float scaleFactor;
+    if(quality<50){
+        // more aggressive below 50
+        scaleFactor=50.0f/(float)quality;
+    }
+    else{
+        // smoother curve above 50
+        scaleFactor= 2.0f - ((float)quality*2.0f/100.0f);
+    }
+
+    for(int i=0;i<64;i++){
+        int val = (int)((float)quantTable[i] * scaleFactor + 0.5f);
+
+        if(val<1)
+            val=1;
+        if(val>255)
+            val=255;
+
+        quantTable[i]=val;
     }
 }
+
 void quantize(const void* channel, const int width, const int y, const int x, const int quantTable[64]) {
 
     int32_t* originalInt=(int32_t*)channel;
@@ -331,6 +334,7 @@ void quantize(const void* channel, const int width, const int y, const int x, co
     for(int i=0;i<8;i++) {
         for(int j=0;j<8;j++) {
             const int index=(i+y)*width+x+j;
+
             originalInt[index]=(int32_t)roundf(originalFloat[index]/(float)quantTable[i*8+j]);
         }
     }
@@ -366,7 +370,7 @@ static const int zigZagTable[64] = {
  * ZigZag and RLE encode an 8x8 block
  * Returns the number of pairs created
  */
-uint32_t encodeBlock(const void* channel, const int width, const int y, const int x, RLEPair* output) {
+uint32_t encodeBlock(const void* channel, const int width, const int y, const int x, RLEPair* output, int32_t* previousDC) {
     int32_t* originalInt=(int32_t*)channel;
 
     // zigzag
@@ -381,11 +385,20 @@ uint32_t encodeBlock(const void* channel, const int width, const int y, const in
     }
 
 
+    // encode the DC coefficient storing the high part in zeros and the low part in value
+    const int16_t dc=(int16_t)(zigZagged[0] - *previousDC);
+    *previousDC=zigZagged[0];
+
+    const uint8_t lowBits = (uint8_t)(dc & 0xFF); // low part
+    const int8_t highBits = (int8_t)((dc >> 8) & 0xFF); //high part
+    output[0].zeros=lowBits;
+    output[0].value=highBits;
+
     // rle encode
-    uint32_t pairCount=0;
+    uint32_t pairCount=1;
     uint8_t zeros=0;
 
-    for(int i=0;i<64;i++) {
+    for(int i=1;i<64;i++) {
         const int val=zigZagged[i];
 
         if(val==0 && zeros<255) {
@@ -428,9 +441,10 @@ uint32_t encodeChannel(const void* channel, const int height, const int width, R
         exit(1);
     }
 
+    int32_t previousDC=0;
     for(int i=0;i<height;i+=8) {
         for(int j=0;j<width;j+=8) {
-            const uint32_t blockPairs=encodeBlock(channel,width,i,j,&buf[totalPairs]);
+            const uint32_t blockPairs=encodeBlock(channel,width,i,j,&buf[totalPairs],&previousDC);
             totalPairs+=blockPairs;
         }
     }
@@ -448,9 +462,44 @@ uint32_t encodeChannel(const void* channel, const int height, const int width, R
     return totalPairs*sizeof(RLEPair);
 }
 
-SAMS* compress(const BMP* bmp, unsigned int quality) {
-    if(quality>100) quality=100;
+void processBlockEncode(const void* channel, const int width, const int y, const int x, const int quantTable[64], const float dct[64]){
+    applyDCT8x8(channel,width,y,x,dct);
+    quantize(channel,width,y,x,quantTable);
+}
 
+typedef enum {
+    LUMINANCE,
+    CHROMA
+} channel_type;
+
+typedef struct{
+    void** channel_p;
+    channel_type type;
+    int width;
+    int height;
+}processChannelArgs;
+void* processChannel(void* arg){
+    // TODO: implement function to process a channel independently, then run a thread for each channel
+    processChannelArgs* args=arg;
+
+    int width=args->width;
+    int height=args->height;
+    if(args->type==CHROMA){
+        // downsample chroma channels
+        downsampleChroma(args->channel_p,height,width);
+        width=(width+1)/2;
+
+        // make blocks with neutral strategy
+        divideTo8x8(args->channel_p,height,width,PADDING_NEUTRAL);
+    }
+    else{
+        // make blocks with replicate strategy
+        divideTo8x8(args->channel_p,height,width,PADDING_REPLICATE);
+    }
+}
+
+
+SAMS* compress(const BMP* bmp, const unsigned int quality) {
     const int height=bmp->header.height;
     const int width=bmp->header.width;
 
@@ -458,8 +507,11 @@ SAMS* compress(const BMP* bmp, unsigned int quality) {
     void *Y=NULL,*Cb=NULL,*Cr=NULL;
     bmpBGRtoYCbCr(bmp,&Y,&Cb,&Cr);
 
+    pthread_t thread_y,thread_cb,thread_cr;
+
     // Downsample Cb and Cr
-    downsampleCbCr(&Cb,&Cr,height,width);
+    downsampleChroma(&Cb,height,width);
+    downsampleChroma(&Cr,height,width);
     int chromaWidth=(width+1)/2;
     int chromaHeight=(height+1)/2;
 
@@ -474,40 +526,25 @@ SAMS* compress(const BMP* bmp, unsigned int quality) {
     chromaHeight=((chromaHeight+7)/8)*8;
     chromaWidth=((chromaWidth+7)/8)*8;
 
-    // Apply DCT
+    // Apply DCT and quantize
     float *dct = computeDCT();
-    for(int i=0;i<lumHeight;i+=8) {
-        for(int j=0;j<lumWidth;j+=8) {
-            applyDCT8x8(Y,lumWidth,i,j,dct);
-        }
-    }
-
-    for(int i=0;i<chromaHeight;i+=8) {
-        for(int j=0;j<chromaWidth;j+=8) {
-            applyDCT8x8(Cb,chromaWidth,i,j,dct);
-            applyDCT8x8(Cr,chromaWidth,i,j,dct);
-        }
-    }
-
-    free(dct); dct=NULL;
-
-    // Quantize blocks
-
     computeQuantTable(LUMINANCE_QUANT,quality);
     computeQuantTable(CHROMA_QUANT,quality);
 
     for(int i=0;i<lumHeight;i+=8) {
         for(int j=0;j<lumWidth;j+=8) {
-            quantize(Y,lumWidth,i,j,LUMINANCE_QUANT);
+            processBlockEncode(Y,lumWidth,i,j,LUMINANCE_QUANT,dct);
         }
     }
 
     for(int i=0;i<chromaHeight;i+=8) {
         for(int j=0;j<chromaWidth;j+=8) {
-            quantize(Cb,chromaWidth,i,j,CHROMA_QUANT);
-            quantize(Cr,chromaWidth,i,j,CHROMA_QUANT);
+            processBlockEncode(Cb,chromaWidth,i,j,CHROMA_QUANT,dct);
+            processBlockEncode(Cr,chromaWidth,i,j,CHROMA_QUANT,dct);
         }
     }
+    free(dct); dct=NULL;
+
 
     // RLE
     RLEPair *YRle, *CbRle, *CrRle;
@@ -527,7 +564,7 @@ void* decodeChannel(const RLEPair* encoded, const uint32_t len, const int height
     const uint32_t paddedHeight=((height+7)/8)*8;
     const uint32_t paddedWidth=((width+7)/8)*8;
 
-    float *decoded=calloc(paddedHeight*paddedWidth,sizeof(float));
+    int32_t *decoded=calloc(paddedHeight*paddedWidth,sizeof(int32_t));
     if(!decoded) {
         perror("decodeChannel - cannot allocate memory");
         exit(1);
@@ -535,11 +572,24 @@ void* decodeChannel(const RLEPair* encoded, const uint32_t len, const int height
 
     uint32_t pairIndex=0;
     const uint32_t pairCount=len/sizeof(RLEPair);
+    int32_t previousDC=0;
 
     for(int i=0;i<paddedHeight;i+=8) {
         for(int j=0;j<paddedWidth;j+=8) {
-            float block[64]={0};
-            int blockIndex=0;
+            int32_t block[64]={0};
+
+            // handle DC coefficient
+            const uint8_t lowBits = encoded[pairIndex].zeros;
+            const int8_t highBits = encoded[pairIndex].value;
+
+            int32_t dc =(int16_t)(highBits<<8) | (uint16_t)lowBits;
+            dc+=previousDC;
+            previousDC=dc;
+
+            block[0]=dc;
+            pairIndex++;
+
+            int blockIndex=1;
 
             // read the block
             while(blockIndex<64 && pairIndex<pairCount) {
@@ -548,7 +598,7 @@ void* decodeChannel(const RLEPair* encoded, const uint32_t len, const int height
 
                 // read value
                 if(blockIndex<64) {
-                    block[blockIndex]= encoded[pairIndex].value;
+                    block[blockIndex]= (int32_t)encoded[pairIndex].value;
                     blockIndex++;
                 }
                 pairIndex++;
@@ -570,11 +620,14 @@ void* decodeChannel(const RLEPair* encoded, const uint32_t len, const int height
 
 void reverseQuantize(void* channel, const int width, const int y, const int x, const int quantTable[64]) {
     float* originalFloat=(float*)channel;
+    int32_t *originalInt=(int32_t*)channel;
 
     for(int i=0;i<8;i++) {
         for(int j=0;j<8;j++) {
             const int index=(i+y)*width+x+j;
-            originalFloat[index]=originalFloat[index] * (float)quantTable[i*8+j];
+            const int32_t value=originalInt[index];
+            originalFloat[index]=(float)value * (float)quantTable[i*8+j];
+
         }
     }
 }
@@ -595,26 +648,24 @@ void reverseDCT(void* channel, const int width, const int y, const int x, const 
     for(int i=0;i<8;i++){
         for(int j=0;j<8;j++){
             float s=0.0f;
+
             for(int k=0;k<8;k++){
-                float factor=coeffs[k*8+j];
-                if(k==0)
-                    factor*=ONE_OVER_SQRT_TWO;
-                s+=factor*dct[i*8+k];
+                const float scale = (k==0)? ONE_OVER_SQRT_TWO:1.0f;
+                s+= coeffs[k*8+j] * scale * dct[k*8+i];
             }
+
             colIDCT[i*8+j]=s;
         }
     }
 
     // rows
-    float result[64];
     for(int i=0;i<8;i++){
         for(int j=0;j<8;j++){
             float s=0.0f;
+
             for(int k=0;k<8;k++){
-                float factor=colIDCT[i*8+k];
-                if(k==0)
-                    factor*=ONE_OVER_SQRT_TWO;
-                s+=factor*dct[j*8+k];
+                const float scale = (k==0)? ONE_OVER_SQRT_TWO:1.0f;
+                s+= colIDCT[i*8+k] * scale * dct[k*8+j];
             }
 
             s*=0.25f;
@@ -627,6 +678,11 @@ void reverseDCT(void* channel, const int width, const int y, const int x, const 
             channelFloat[index]=s;
         }
     }
+}
+
+void processBlockDecode(void* channel, const int width, const int y, const int x, const int quantTable[64], const float dct[64]){
+    reverseQuantize(channel,width,y,x,quantTable);
+    reverseDCT(channel,width,y,x,dct);
 }
 
 void restructure(void** channel, const int paddedWidth, const int paddedHeight, const int imgWidth, const int imgHeight) {
@@ -740,35 +796,20 @@ BMP* decompress(const SAMS* sams) {
     chromaHeight=((chromaHeight+7)/8)*8;
     chromaWidth=((chromaWidth+7)/8)*8;
 
-    // reverse quantize
-    for(int i=0;i<lumHeight;i+=8) {
-        for(int j=0;j<lumWidth;j+=8) {
-            reverseQuantize(Y,lumWidth,i,j,LUMINANCE_QUANT_READ);
-        }
-    }
-
-    for(int i=0;i<chromaHeight;i+=8) {
-        for(int j=0;j<chromaWidth;j+=8) {
-            reverseQuantize(Cb,chromaWidth,i,j,CHROMA_QUANT_READ);
-            reverseQuantize(Cr,chromaWidth,i,j,CHROMA_QUANT_READ);
-        }
-    }
-
-    // reverse dct
+    // reverse quantize and reverse dct
     float *dct = computeDCT();
     for(int i=0;i<lumHeight;i+=8) {
         for(int j=0;j<lumWidth;j+=8) {
-            reverseDCT(Y,lumWidth,i,j,dct);
+            processBlockDecode(Y,lumWidth,i,j,LUMINANCE_QUANT_READ,dct);
         }
     }
 
     for(int i=0;i<chromaHeight;i+=8) {
         for(int j=0;j<chromaWidth;j+=8) {
-            reverseDCT(Cb,chromaWidth,i,j,dct);
-            reverseDCT(Cr,chromaWidth,i,j,dct);
+            processBlockDecode(Cb,chromaWidth,i,j,CHROMA_QUANT_READ,dct);
+            processBlockDecode(Cr,chromaWidth,i,j,CHROMA_QUANT_READ,dct);
         }
     }
-
     free(dct); dct=NULL;
 
     // restructure without padding
