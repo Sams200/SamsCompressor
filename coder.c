@@ -8,12 +8,11 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include "bmp.h"
 #include <stdbool.h>
 #include <string.h>
+#include <pthread.h>
 
-#include <time.h>
-
+#include "bmp.h"
 #include "sams.h"
 
 #pragma pack(1)
@@ -84,12 +83,6 @@ void downsampleChroma(void **channel, int height, int width) {
     const int newSize = newHeight * newWidth;
 
     void *newCh = malloc(sizeof(float) * newSize);
-
-    if (!newCh) {
-        if (newCh) free(newCh);
-        perror("downsample - Could not allocate memory");
-        exit(1);
-    }
 
     const float* chp=(float*)*channel;
     float* newChp=(float*)newCh;
@@ -296,7 +289,9 @@ static int CHROMA_QUANT[64] = {
  * a higher quality means we make the quantization table
  * smaller, and a lower quality means we make it bigger
  */
-void computeQuantTable(int quantTable[64],unsigned int quality) {
+int* computeQuantTable(const int quantTable[64],unsigned int quality) {
+    int* table=(int*)malloc(sizeof(int)*64);
+
     if(quality<1)
         quality=1;
     if(quality>100)
@@ -322,8 +317,10 @@ void computeQuantTable(int quantTable[64],unsigned int quality) {
         if(val>255)
             val=255;
 
-        quantTable[i]=val;
+        table[i]=val;
     }
+
+    return table;
 }
 
 void quantize(const void* channel, const int width, const int y, const int x, const int quantTable[64]) {
@@ -431,8 +428,8 @@ uint32_t encodeBlock(const void* channel, const int width, const int y, const in
  * Encode a channel
  * Return the size in bytes
  */
-uint32_t encodeChannel(const void* channel, const int height, const int width, RLEPair** output) {
-    uint32_t totalPairs=0;
+int encodeChannel(const void* channel, const int height, const int width, RLEPair** output) {
+    int totalPairs=0;
     const uint32_t maxPairs= height*width;
 
     RLEPair* buf=malloc(sizeof(RLEPair) * maxPairs);
@@ -444,7 +441,7 @@ uint32_t encodeChannel(const void* channel, const int height, const int width, R
     int32_t previousDC=0;
     for(int i=0;i<height;i+=8) {
         for(int j=0;j<width;j+=8) {
-            const uint32_t blockPairs=encodeBlock(channel,width,i,j,&buf[totalPairs],&previousDC);
+            const int blockPairs=(int)encodeBlock(channel,width,i,j,&buf[totalPairs],&previousDC);
             totalPairs+=blockPairs;
         }
     }
@@ -459,7 +456,7 @@ uint32_t encodeChannel(const void* channel, const int height, const int width, R
         *output=buf;
     }
 
-    return totalPairs*sizeof(RLEPair);
+    return (int)(totalPairs*sizeof(RLEPair));
 }
 
 void processBlockEncode(const void* channel, const int width, const int y, const int x, const int quantTable[64], const float dct[64]){
@@ -477,10 +474,16 @@ typedef struct{
     channel_type type;
     int width;
     int height;
-}processChannelArgs;
-void* processChannel(void* arg){
-    // TODO: implement function to process a channel independently, then run a thread for each channel
-    processChannelArgs* args=arg;
+    int quality;
+}encodeChannelArgs;
+
+typedef struct{
+    int len;
+    RLEPair* rle;
+    int* quantTable;
+}encodeChannelRet;
+void* encodeChannelFull(void* arg){
+    encodeChannelArgs* args=arg;
 
     int width=args->width;
     int height=args->height;
@@ -488,6 +491,7 @@ void* processChannel(void* arg){
         // downsample chroma channels
         downsampleChroma(args->channel_p,height,width);
         width=(width+1)/2;
+        height=(height+1)/2;
 
         // make blocks with neutral strategy
         divideTo8x8(args->channel_p,height,width,PADDING_NEUTRAL);
@@ -496,10 +500,41 @@ void* processChannel(void* arg){
         // make blocks with replicate strategy
         divideTo8x8(args->channel_p,height,width,PADDING_REPLICATE);
     }
+
+    height=((height+7)/8)*8;
+    width=((width+7)/8)*8;
+
+    // apply dct and quantization
+    float *dct = computeDCT();
+    int* quantTable;
+    if(args->type==CHROMA){
+        quantTable=computeQuantTable(CHROMA_QUANT,args->quality);
+    }
+    else{
+        quantTable=computeQuantTable(LUMINANCE_QUANT,args->quality);
+    }
+
+    for(int i=0;i<height;i+=8){
+        for(int j=0;j<width;j+=8){
+            processBlockEncode(*(args->channel_p),width,i,j,quantTable,dct);
+        }
+    }
+
+    free(dct); dct=NULL;
+
+    // RLE encode
+    RLEPair* rle;
+    int rleLen=encodeChannel(*(args->channel_p),height,width,&rle);
+    free(*(args->channel_p)); *(args->channel_p)=NULL;
+
+    encodeChannelRet* ret=malloc(sizeof(encodeChannelRet));
+    ret->len=rleLen;
+    ret->rle=rle;
+    ret->quantTable=quantTable;
+    return ret;
 }
 
-
-SAMS* compress(const BMP* bmp, const unsigned int quality) {
+SAMS* compress(const BMP* bmp, const int quality) {
     const int height=bmp->header.height;
     const int width=bmp->header.width;
 
@@ -509,53 +544,57 @@ SAMS* compress(const BMP* bmp, const unsigned int quality) {
 
     pthread_t thread_y,thread_cb,thread_cr;
 
-    // Downsample Cb and Cr
-    downsampleChroma(&Cb,height,width);
-    downsampleChroma(&Cr,height,width);
-    int chromaWidth=(width+1)/2;
-    int chromaHeight=(height+1)/2;
+    // initialize arguments
+    encodeChannelArgs* yArgs=malloc(sizeof(encodeChannelArgs));
+    yArgs->channel_p=&Y;
+    yArgs->type=LUMINANCE;
+    yArgs->width=width;
+    yArgs->height=height;
+    yArgs->quality=quality;
 
-    // Divide to 8x8 blocks
-    divideTo8x8(&Y,height,width,PADDING_REPLICATE);
-    divideTo8x8(&Cb,chromaHeight,chromaWidth,PADDING_NEUTRAL);
-    divideTo8x8(&Cr,chromaHeight,chromaWidth,PADDING_NEUTRAL);
+    encodeChannelArgs* cbArgs=malloc(sizeof(encodeChannelArgs));
+    cbArgs->channel_p=&Cb;
+    cbArgs->type=CHROMA;
+    cbArgs->width=width;
+    cbArgs->height=height;
+    cbArgs->quality=quality;
 
-    // update dimensions
-    const int lumHeight=((height+7)/8)*8;
-    const int lumWidth=((width+7)/8)*8;
-    chromaHeight=((chromaHeight+7)/8)*8;
-    chromaWidth=((chromaWidth+7)/8)*8;
+    encodeChannelArgs* crArgs=malloc(sizeof(encodeChannelArgs));
+    crArgs->channel_p=&Cr;
+    crArgs->type=CHROMA;
+    crArgs->width=width;
+    crArgs->height=height;
+    crArgs->quality=quality;
 
-    // Apply DCT and quantize
-    float *dct = computeDCT();
-    computeQuantTable(LUMINANCE_QUANT,quality);
-    computeQuantTable(CHROMA_QUANT,quality);
+    // create threads
+    encodeChannelRet* yRet=NULL,*cbRet=NULL,*crRet=NULL;
 
-    for(int i=0;i<lumHeight;i+=8) {
-        for(int j=0;j<lumWidth;j+=8) {
-            processBlockEncode(Y,lumWidth,i,j,LUMINANCE_QUANT,dct);
-        }
-    }
+    pthread_create(&thread_y,NULL,encodeChannelFull,(void*)yArgs);
+    pthread_create(&thread_cb,NULL,encodeChannelFull,(void*)cbArgs);
+    pthread_create(&thread_cr,NULL,encodeChannelFull,(void*)crArgs);
 
-    for(int i=0;i<chromaHeight;i+=8) {
-        for(int j=0;j<chromaWidth;j+=8) {
-            processBlockEncode(Cb,chromaWidth,i,j,CHROMA_QUANT,dct);
-            processBlockEncode(Cr,chromaWidth,i,j,CHROMA_QUANT,dct);
-        }
-    }
-    free(dct); dct=NULL;
+    pthread_join(thread_y,(void**)&yRet);
+    pthread_join(thread_cb,(void**)&cbRet);
+    pthread_join(thread_cr,(void**)&crRet);
 
 
-    // RLE
+    // write results
     RLEPair *YRle, *CbRle, *CrRle;
-    const uint32_t lumLen=encodeChannel(Y,lumHeight,lumWidth,&YRle);
-    free(Y);
-    const uint32_t cbLen=encodeChannel(Cb,chromaHeight,chromaWidth,&CbRle);
-    free(Cb);
-    const uint32_t crLen=encodeChannel(Cr,chromaHeight,chromaWidth,&CrRle);
-    free(Cr);
+    uint32_t lumLen,cbLen,crLen;
 
-    SAMS* sams=createSams(YRle,lumLen,CbRle,cbLen,CrRle,crLen,height,width,LUMINANCE_QUANT,CHROMA_QUANT);
+    YRle=yRet->rle; lumLen=yRet->len;
+    CbRle=cbRet->rle; cbLen=cbRet->len;
+    CrRle=crRet->rle; crLen=crRet->len;
+
+    free(yArgs);
+    free(cbArgs);
+    free(crArgs);
+
+    SAMS* sams=createSams(YRle,lumLen,CbRle,cbLen,CrRle,crLen,height,width,yRet->quantTable,cbRet->quantTable);
+
+    free(yRet->quantTable); free(yRet);
+    free(cbRet->quantTable); free(cbRet);
+    free(crRet->quantTable); free(crRet);
 
     return sams;
 }
@@ -766,6 +805,57 @@ void YCbCrToBGR(void* Y, void* CB, void* CR, const BMP* bmp) {
     }
 }
 
+typedef struct{
+    RLEPair *rle;
+    int len;
+
+    int height;
+    int width;
+
+    const int32_t* quantTable;
+
+    channel_type type;
+}decodeChannelArgs;
+void* decodeChannelFull(void* arg){
+    decodeChannelArgs *args=(decodeChannelArgs*)arg;
+
+    int height=args->height, imgHeight=args->height;
+    int width=args->width, imgWidth=args->width;
+
+    if(args->type==CHROMA){
+        height=(height+1)/2;
+        width=(width+1)/2;
+    }
+
+    // decode RLE
+    void* channel=decodeChannel(args->rle, args->len, height, width);
+    height=((height+7)/8)*8;
+    width=((width+7)/8)*8;
+
+    // reverse quantize and dct
+    float *dct = computeDCT();
+    for(int i=0;i<height;i+=8) {
+        for(int j=0;j<width;j+=8) {
+            processBlockDecode(channel,width,i,j,args->quantTable,dct);
+        }
+    }
+    free(dct); dct=NULL;
+
+    // restructure without padding
+    if(args->type==LUMINANCE){
+        restructure(&channel,width,height,imgWidth,imgHeight);
+    }
+    else{
+        restructure(&channel,width,height,(imgWidth+1)/2,(imgHeight+1)/2);
+        height=(imgHeight+1)/2;
+        width=(imgWidth+1)/2;
+
+        // upscale chroma
+        upscale(&channel,width,height,imgWidth,imgHeight);
+    }
+
+    return channel;
+}
 BMP* decompress(const SAMS* sams) {
     RLEPair *YRle=sams->Y;
     RLEPair *CbRle=sams->Cb;
@@ -774,11 +864,6 @@ BMP* decompress(const SAMS* sams) {
     const int height=(int)sams->header.height;
     const int width=(int)sams->header.width;
 
-    int lumHeight=height;
-    int lumWidth=width;
-    int chromaHeight=(height+1)/2;
-    int chromaWidth=(width+1)/2;
-
     const int lumLen=(int)sams->header.lumLen;
     const int cbLen=(int)sams->header.cbSize;
     const int crLen=(int)sams->header.crSize;
@@ -786,42 +871,48 @@ BMP* decompress(const SAMS* sams) {
     const int32_t *LUMINANCE_QUANT_READ = sams->header.LUMINANCE_QUANT;
     const int32_t *CHROMA_QUANT_READ = sams->header.CHROMA_QUANT;
 
-    // decode RLE
-    void *Y = decodeChannel(YRle, lumLen, lumHeight, lumWidth);
-    void *Cb = decodeChannel(CbRle, cbLen, chromaHeight, chromaWidth);
-    void *Cr= decodeChannel(CrRle, crLen, chromaHeight, chromaWidth);
+    pthread_t thread_y,thread_cb,thread_cr;
 
-    lumHeight=((lumHeight+7)/8)*8;
-    lumWidth=((lumWidth+7)/8)*8;
-    chromaHeight=((chromaHeight+7)/8)*8;
-    chromaWidth=((chromaWidth+7)/8)*8;
+    // initialize arguments
+    decodeChannelArgs* yArgs=malloc(sizeof(decodeChannelArgs));
+    yArgs->rle=YRle;
+    yArgs->len=lumLen;
+    yArgs->type=LUMINANCE;
+    yArgs->quantTable=LUMINANCE_QUANT_READ;
+    yArgs->width=width;
+    yArgs->height=height;
 
-    // reverse quantize and reverse dct
-    float *dct = computeDCT();
-    for(int i=0;i<lumHeight;i+=8) {
-        for(int j=0;j<lumWidth;j+=8) {
-            processBlockDecode(Y,lumWidth,i,j,LUMINANCE_QUANT_READ,dct);
-        }
-    }
+    decodeChannelArgs* cbArgs=malloc(sizeof(decodeChannelArgs));
+    cbArgs->rle=CbRle;
+    cbArgs->len=cbLen;
+    cbArgs->type=CHROMA;
+    cbArgs->quantTable=CHROMA_QUANT_READ;
+    cbArgs->width=width;
+    cbArgs->height=height;
 
-    for(int i=0;i<chromaHeight;i+=8) {
-        for(int j=0;j<chromaWidth;j+=8) {
-            processBlockDecode(Cb,chromaWidth,i,j,CHROMA_QUANT_READ,dct);
-            processBlockDecode(Cr,chromaWidth,i,j,CHROMA_QUANT_READ,dct);
-        }
-    }
-    free(dct); dct=NULL;
+    decodeChannelArgs* crArgs=malloc(sizeof(decodeChannelArgs));
+    crArgs->rle=CrRle;
+    crArgs->len=crLen;
+    crArgs->type=CHROMA;
+    crArgs->quantTable=CHROMA_QUANT_READ;
+    crArgs->width=width;
+    crArgs->height=height;
 
-    // restructure without padding
-    restructure(&Y,lumWidth,lumHeight,width,height);
-    restructure(&Cb,chromaWidth,chromaHeight,(width+1)/2,(height+1)/2);
-    restructure(&Cr,chromaWidth,chromaHeight,(width+1)/2,(height+1)/2);
-    chromaHeight=(height+1)/2;
-    chromaWidth=(width+1)/2;
+    // create threads
+    void *Y=NULL,*Cb=NULL,*Cr=NULL;
 
-    // upscale Cb and Cr
-    upscale(&Cb,chromaWidth,chromaHeight,width,height);
-    upscale(&Cr,chromaWidth,chromaHeight,width,height);
+    pthread_create(&thread_y,NULL,decodeChannelFull,(void*)yArgs);
+    pthread_create(&thread_cb,NULL,decodeChannelFull,(void*)cbArgs);
+    pthread_create(&thread_cr,NULL,decodeChannelFull,(void*)crArgs);
+
+    pthread_join(thread_y,&Y);
+    pthread_join(thread_cb,&Cb);
+    pthread_join(thread_cr,&Cr);
+
+    // write results
+    free(yArgs);
+    free(cbArgs);
+    free(crArgs);
 
     // convert to BGR
     BMP* bmp=createBMP24bit(width,height);

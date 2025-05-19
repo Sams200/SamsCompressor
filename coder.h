@@ -8,6 +8,6 @@
 #include "bmp.h"
 #include "sams.h"
 
-SAMS* compress(const BMP* bmp, unsigned int quality);
+SAMS* compress(const BMP* bmp, int quality);
 BMP* decompress(const SAMS* sams);
 #endif //COMPRESS_H
