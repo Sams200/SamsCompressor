@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.27 (TeX Live 2026/dev/Arch Linux) (preloaded format=pdflatex 2025.5.28)  31 MAY 2025 22:08
+This is pdfTeX, Version 3.141592653-2.6-1.40.27 (TeX Live 2026/dev/Arch Linux) (preloaded format=pdflatex 2025.5.28)  31 MAY 2025 22:17
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -875,7 +875,7 @@ Dictionary: translator-theorem-dictionary, Language: English
 )
 \c@lstlisting=\count360
  (./IPDocumentation.nav)
-<images/utLogo.png, id=35, 1805.74625pt x 102.3825pt>
+<images/utLogo.png, id=55, 1805.74625pt x 102.3825pt>
 File: images/utLogo.png Graphic file (type png)
 <use images/utLogo.png>
 Package pdftex.def Info: images/utLogo.png  used on input line 92.
@@ -945,7 +945,7 @@ LaTeX Font Info:    Font shape `OT1/cmss/b/it' in size <10> not available
 [6
 
 ]
-<images/chroma.png, id=234, 2569.6pt x 1705.37125pt>
+<images/chroma.png, id=264, 2569.6pt x 1705.37125pt>
 File: images/chroma.png Graphic file (type png)
 <use images/chroma.png>
 Package pdftex.def Info: images/chroma.png  used on input line 171.
@@ -967,7 +967,7 @@ Package pdftex.def Info: images/chroma.png  used on input line 171.
 [10
 
 ]
-<images/zigzag.png, id=358, 326.21875pt x 306.14375pt>
+<images/zigzag.png, id=388, 326.21875pt x 306.14375pt>
 File: images/zigzag.png Graphic file (type png)
 <use images/zigzag.png>
 Package pdftex.def Info: images/zigzag.png  used on input line 236.
@@ -1019,20 +1019,14 @@ L3 programming layer <2025-01-18>
 
 LaTeX Font Warning: Some font shapes were not available, defaults substituted.
 
-
-Package rerunfilecheck Warning: File `IPDocumentation.out' has changed.
-(rerunfilecheck)                Rerun to get outlines right
-(rerunfilecheck)                or use package `bookmark'.
-
-Package rerunfilecheck Info: Checksums for `IPDocumentation.out':
-(rerunfilecheck)             Before: 0185ED2BD3FB660115B297E47CBA59FF;671
-(rerunfilecheck)             After:  71484044C63BD89046AA6E33DDE68652;1267.
+Package rerunfilecheck Info: File `IPDocumentation.out' has not changed.
+(rerunfilecheck)             Checksum: 71484044C63BD89046AA6E33DDE68652;1267.
  ) 
 Here is how much of TeX's memory you used:
- 23242 strings out of 475171
- 436791 string characters out of 5767095
+ 23276 strings out of 475171
+ 437084 string characters out of 5767095
  990136 words of memory out of 5000000
- 45715 multiletter control sequences out of 15000+600000
+ 45749 multiletter control sequences out of 15000+600000
  576168 words of font info for 98 fonts, out of 8000000 for 9000
  14 hyphenation exceptions out of 8191
  101i,16n,107p,390b,604s stack positions out of 10000i,1000n,20000p,200000b,200000s
@@ -1052,10 +1046,10 @@ s/type1/public/amsfonts/cm/cmsy10.pfb></usr/share/texmf-dist/fonts/type1/public
 /amsfonts/cm/cmsy7.pfb></usr/share/texmf-dist/fonts/type1/public/amsfonts/cm/cm
 sy9.pfb></usr/share/texmf-dist/fonts/type1/public/amsfonts/cm/cmtt10.pfb></usr/
 share/texmf-dist/fonts/type1/public/amsfonts/cm/cmtt9.pfb>
-Output written on IPDocumentation.pdf (17 pages, 392029 bytes).
+Output written on IPDocumentation.pdf (17 pages, 392927 bytes).
 PDF statistics:
- 669 PDF objects out of 1000 (max. 8388607)
- 558 compressed objects within 6 object streams
+ 689 PDF objects out of 1000 (max. 8388607)
+ 578 compressed objects within 6 object streams
  45 named destinations out of 1000 (max. 500000)
- 116 words of extra memory for PDF output out of 10000 (max. 10000000)
+ 156 words of extra memory for PDF output out of 10000 (max. 10000000)
 
