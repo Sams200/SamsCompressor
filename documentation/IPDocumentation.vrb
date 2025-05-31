@@ -1,0 +1,10 @@
+\frametitle{Frame 1}
+\begin{lstlisting}
+  #include <stdio.h>
+  #include <stdlib.h>
+
+  int main(){
+    printf("Hello World!\n");
+    return 0;
+  }
+ \end{lstlisting}

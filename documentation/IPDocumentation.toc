@@ -1,0 +1,10 @@
+\beamer@sectionintoc {1}{Introduction}{3}{0}{1}
+\beamer@sectionintoc {2}{Project Overview}{5}{0}{2}
+\beamer@sectionintoc {3}{Color Space Conversion}{6}{0}{3}
+\beamer@sectionintoc {4}{Block Division and DCT}{8}{0}{4}
+\beamer@sectionintoc {5}{Quantization}{10}{0}{5}
+\beamer@sectionintoc {6}{Run Length Encoding}{11}{0}{6}
+\beamer@sectionintoc {7}{JPEG Decoding}{13}{0}{7}
+\beamer@sectionintoc {8}{Optimizations}{14}{0}{8}
+\beamer@sectionintoc {9}{Performance Evaluation}{16}{0}{9}
+\beamer@sectionintoc {10}{References}{17}{0}{10}
