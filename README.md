@@ -11,7 +11,7 @@ A JPEG like compressor written in C. Not quite as fast as OpenCV
     
 Important functions are **readBmp** and **writeBmp** from **bmp.h**, 
 and **readSams** and **writeSams** from **sams.h**.
-You can compress a **BMP** file using the **compress** function in **jpeg.h**,
+You can compress a **BMP** file using the **compress** function in **coder.h**,
 and decompress a **SAMS** file using the **decompress** function.
 
 Compression performance is slightly behind OpenCV. I managed
