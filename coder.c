@@ -19,6 +19,10 @@
 #define uchar unsigned char
 #define ONE_OVER_SQRT_TWO 0.70710678f
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 /**
  *  So from what I understand, these are just some magic numbers
  *  we use to transform the image, since the human eye is more
